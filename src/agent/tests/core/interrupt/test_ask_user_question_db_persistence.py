@@ -87,8 +87,27 @@ class _RecordingSessionWriter(BaseSessionWriter):
     def set_streaming_finished(self):
         pass
 
-    def handle_activity_snapshot(self, event) -> None:
-        """D-03/D-04: 从 ACTIVITY_SNAPSHOT 事件 content 提取 answers 更新 DB interrupt 记录。"""
+    def handle_run_finished(self, event) -> None:
+        """Phase 14.2: 重写以支持 ask_user_question 续流终态写入。
+
+        super().handle_run_finished(event) 处理流式消息回写 + interrupt 首次落库，
+        非 interrupt 分支调用 _handle_ask_user_question_resume_finished 完成 DB 更新。
+        """
+        super().handle_run_finished(event)
+
+        outcome = getattr(event, "outcome", None)
+        outcome_type = (
+            outcome.get("type") if isinstance(outcome, dict) else getattr(outcome, "type", None) if outcome else None
+        )
+        if outcome and outcome_type != "interrupt":
+            self._handle_ask_user_question_resume_finished(event)
+
+    def _handle_ask_user_question_resume_finished(self, event) -> None:
+        """Phase 14.2: 从 RunFinishedEvent outcome/result 提取数据更新 DB interrupt 记录。
+
+        替代原 handle_activity_snapshot（已删除），逻辑从 event.outcome.interrupts[0] +
+        event.result.payload.answers 提取数据，查 in-memory _db_records 更新。
+        """
         import json as _json
 
         from aidev_agent.core.ag_ui.ask_user_question import (
@@ -97,28 +116,23 @@ class _RecordingSessionWriter(BaseSessionWriter):
         )
         from aidev_agent.enums import PromptRole
 
-        content = getattr(event, "content", None)
-        if isinstance(content, str):
-            try:
-                content = _json.loads(content)
-            except (TypeError, ValueError):
-                return
-        if not isinstance(content, dict):
+        outcome = getattr(event, "outcome", None)
+        if isinstance(outcome, dict):
+            interrupts = outcome.get("interrupts") or []
+        else:
+            interrupts = getattr(outcome, "interrupts", []) if outcome else []
+        if not interrupts:
             return
-        result_list = content.get("result") or []
-        if not result_list or not isinstance(result_list[0], dict):
+        first_interrupt = interrupts[0] if isinstance(interrupts[0], dict) else {}
+        if first_interrupt.get("reason") != ASK_USER_QUESTION_REASON:
             return
-        resume_answers = result_list[0].get("payload", {}).get("answers") or []
-        outcome_obj = content.get("outcome") or {}
-        interrupt_list = outcome_obj.get("interrupts") or []
-        if not interrupt_list:
+        interrupt_id = first_interrupt.get("id")
+        if not interrupt_id:
             return
-        first_intr = interrupt_list[0] if isinstance(interrupt_list[0], dict) else {}
-        if first_intr.get("reason") != ASK_USER_QUESTION_REASON:
-            return
-        message_id = first_intr.get("id")
-        if not message_id:
-            return
+        result = getattr(event, "result", None)
+        resume_answers = []
+        if isinstance(result, dict):
+            resume_answers = result.get("payload", {}).get("answers") or []
 
         for content_id, rec in self._db_records.items():
             if rec.get("role") != PromptRole.INTERRUPT.value:
@@ -139,7 +153,7 @@ class _RecordingSessionWriter(BaseSessionWriter):
             if not parsed_intrs:
                 continue
             parsed_first = parsed_intrs[0] if isinstance(parsed_intrs[0], dict) else {}
-            if parsed_first.get("id") != message_id:
+            if parsed_first.get("id") != interrupt_id:
                 continue
             upgraded = AskUserQuestionOutcomeBuilder.upgrade_content_to_success(
                 parsed, "resolved", resume_answers=resume_answers

@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from aidev_agent.api.bk_agent import BkAgentApi
 from aidev_agent.config import settings
 from aidev_agent.core.ag_ui.aidev_agent import AidevAGUIAgent
-from aidev_agent.core.ag_ui.ask_user_question import ASK_USER_QUESTION_REASON
+from aidev_agent.core.ag_ui.ask_user_question import ASK_USER_QUESTION_REASON, filter_ask_user_question_interrupts
 from aidev_agent.core.ag_ui.types import (
     AgentInput,
     InterruptMessage,
@@ -262,17 +262,7 @@ class ChatCompletionAgent(BaseModel):
                 len(tasks),
                 self.thread_id,
             )
-            interrupts = []
-            for task in tasks:
-                for intr in task.interrupts or []:
-                    value = intr.value
-                    if isinstance(value, str):
-                        try:
-                            value = json.loads(value)
-                        except Exception:
-                            continue
-                    if isinstance(value, dict) and value.get("reason") == ASK_USER_QUESTION_REASON:
-                        interrupts.append(value)
+            interrupts = filter_ask_user_question_interrupts(tasks)
             logger.info(
                 "[AskUserQuestion] _query_ask_user_question_interrupts: found %d ask_user_question interrupts",
                 len(interrupts),

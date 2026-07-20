@@ -371,9 +371,7 @@ class LangGraphAgent:
             metadata=metadata or None,
         )
 
-    async def _emit_run_end_extras(
-        self, state_values: State, thread_id: str
-    ) -> AsyncGenerator[Any, None]:
+    async def _emit_run_end_extras(self, state_values: State, thread_id: str) -> AsyncGenerator[Any, None]:
         """本轮 run 收尾扩展点：MESSAGES_SNAPSHOT 之后、RUN_FINISHED 之前每 run 触发一次。
 
         父类默认 no-op；子类覆写以 yield 自定义事件，异常须自行兜底避免阻断 RUN_FINISHED。
@@ -710,6 +708,8 @@ class LangGraphAgent:
         )
 
     async def _handle_on_chat_model_end_event(self, event: Any) -> AsyncGenerator[BaseEvent, None]:
+        if not self.front_end_display:
+            return
         # ChatModelEnd CustomEvent：把"模型这一轮的完整输出快照"分发给 DB 侧。
         # SSE 侧 AidevAGUIAgent.run() 通过 skip_encode_custom 跳过编码（不进入 SSE 输出）。
         # 顺序：在消息收尾事件（ToolCallEnd/TextMessageEnd）之后发出，确保 DB 侧拿到的是收尾后的完整态。
